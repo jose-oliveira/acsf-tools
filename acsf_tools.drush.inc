@@ -121,7 +121,7 @@ function drush_acsf_tools_info() {
     $sites = array();
     foreach ($map['sites'] as $domain => $site_details) {
       $conf = $site_details['conf'];
-      
+
       // Include settings file to get DB name. To save rescources, without bootsrtapping Drupal
       $settings_inc = "/var/www/site-php/{$_ENV['AH_SITE_GROUP']}.{$_ENV['AH_SITE_ENVIRONMENT']}/D7-{$_ENV['AH_SITE_ENVIRONMENT']}-" . $conf['gardens_db_name'] . "-settings.inc";
       $file = file_get_contents($settings_inc);
@@ -139,10 +139,10 @@ function drush_acsf_tools_info() {
       $sites[$conf['gardens_site_id']]['conf'] = array('db_name' => $db_name, 'gname' => $conf['gardens_db_name'], );
     }
   }
-  else {  
+  else {
     drush_log("\nFailed to retrieve the list of sites of the factory.", 'error');
   }
-  
+
   drush_print("\nID\t\tName\t\tDB Name\t\t\t\tDomain\n");
 
   foreach ($sites as $key => $site) {
@@ -175,50 +175,37 @@ function drush_acsf_tools_ml() {
     unset($options['php']);
     unset($options['php-options']);
 
-    $profiles = $options['profiles'] ?? NULL;
-    $profiles = $profiles ? explode(',', $profiles) : NULL;
+    $profiles = $options['profiles'] ?? '';
+    $profiles = explode(',', $profiles);
     unset($options['profiles']);
 
-    foreach ($sites as $details) {
-      // Get the first custom domain if any. Otherwise use the first domain
-      // which is *.acsitefactory.com. Given this is used as --uri parameter
-      // by the drush command, it can have an impact on the drupal process.
-      $domain = $details['domains'][1] ?? $details['domains'][0];
+    $total_time_limit = (int) drush_get_option('total-time-limit');
 
-      // If specific profile is provided, we check if it is the site's profile.
-      // We first try to get site's profile from the settings file. If we can't
-      // find the settings file, we use drush core-status to get it.
-      if (!empty($profiles)) {
-        $proceed = TRUE;
-
-        $site_settings_filepath = 'sites/g/files/' . $details['name'] . '/settings.php';
-        if (file_exists($site_settings_filepath)) {
-          $site_settings = @file_get_contents($site_settings_filepath);
-          if (preg_match("/'install_profile'] = '([a-zA-Z_]*)'/", $site_settings, $matches)) {
-            if (isset($matches[1]) && !in_array($matches[1], $profiles)) {
-              $proceed = FALSE;
-            }
-          }
-        }
-        else {
+    $processed = array();
+    $end = time() + $total_time_limit;
+    do {
+      foreach ($sites as $delta => $details) {
+        $domain = $details['domains'][0];
+        if (!empty($profiles)) {
           $profile_options = $options;
           $profile_options['fields'] = 'install-profile';
           $profile_options['l'] = $domain;
-          $site_profile_info = drush_invoke_process('@self', 'core-status', [], $profile_options, ['output' => FALSE]);
-          if (!in_array($site_profile_info['object']['install-profile'], $profiles)) {
-            $proceed = FALSE;
+          $site_profile_info = drush_invoke_process('@self', 'core-status', [], $profile_options);
+          if (in_array($site_profile_info['object']['install-profile'], $profiles)) {
+            drush_log("\n=> Skipping command on $domain", 'ok');
+            continue;
           }
         }
 
-        if (!$proceed) {
-          drush_log("\n=> Skipping command on $domain", 'ok');
-          continue;
-        }
-      }
+        drush_log("\n=> Running command on $domain", 'ok');
+        $output = drush_invoke_process('@self', $command, $arguments, $options + array('l' => $domain));
 
-      drush_log("\n=> Running command on $domain", 'ok');
-      drush_invoke_process('@self', $command, $arguments, $options + array('l' => $domain));
-    }
+        if (empty($output['output'])) {
+          unset($sites[$delta]);
+        }
+
+      }
+    } while ($total_time_limit && time() < $end && !empty($sites));
   }
 }
 
